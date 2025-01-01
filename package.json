@@ -1,0 +1,27 @@
+{
+  "name": "sonic-ring-calculator",
+  "version": "1.0.0",
+  "description": "Enhanced calculator for Sonic Ring token balances across Devnet and Testnet",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.3.9",
+    "@solana/web3.js": "^1.87.6",
+    "node-fetch": "^2.7.0",
+    "chalk": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "solana",
+    "sonic",
+    "token",
+    "calculator",
+    "blockchain"
+  ],
+  "author": "rmndkyl",
+  "license": "MIT"
+}
