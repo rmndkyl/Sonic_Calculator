@@ -11,8 +11,9 @@ class SonicRingCalculator {
         this.TESTNET_ENDPOINT = 'https://api.testnet.v0.sonic.game';
         this.DEVNET_TOKEN = '8DihuwAUQ9CAU8U2pQ5Rv7FzpsGaZmbwK9Ln6fStdSeo';
         this.TESTNET_TOKEN = 'EaVyvc1xw2wsZV3en6HaSx5B3ebuANXfrFekzX7zZzVm';
+        this.AIRDROP_API = 'https://airdrop.sonic.game/api/allocations';
         
-        // Initialize connections with new RPCs
+        // Initialize connections
         this.devnetConnection = new Connection(this.DEVNET_ENDPOINT, 'confirmed');
         this.testnetConnection = new Connection(this.TESTNET_ENDPOINT, 'confirmed');
     }
@@ -76,7 +77,51 @@ class SonicRingCalculator {
                 uiAmount: 0
             };
         }
-    }    
+    }
+    
+    async checkAirdropEligibility(walletAddress) {
+        try {
+            const response = await fetch(`${this.AIRDROP_API}?wallet=${walletAddress}`);
+            
+            if (!response.ok) {
+                throw new Error(`API request failed with status ${response.status}`);
+            }
+            
+            const allocations = await response.json();
+            
+            if (!Array.isArray(allocations)) {
+                throw new Error('Invalid API response format');
+            }
+            
+            const isEligible = allocations.length > 0;
+            let totalAirdrop = 0;
+            let details = [];
+            
+            if (isEligible) {
+                totalAirdrop = allocations.reduce((sum, allocation) => sum + allocation.total, 0);
+                details = allocations.map(allocation => ({
+                    amount: allocation.total,
+                    description: allocation.description,
+                    category: allocation.category.name,
+                    createdAt: allocation.createdAt
+                }));
+            }
+            
+            return {
+                isEligible,
+                totalAirdrop,
+                details
+            };
+        } catch (error) {
+            console.error(chalk.red(`Error checking airdrop eligibility for ${chalk.yellow(walletAddress)}: ${error.message}`));
+            return {
+                isEligible: false,
+                totalAirdrop: 0,
+                details: [],
+                error: error.message
+            };
+        }
+    }
 
     async calculateTotalBalance(walletAddress) {
         try {
@@ -97,6 +142,9 @@ class SonicRingCalculator {
                 this.TESTNET_TOKEN
             );
 
+            // Check airdrop eligibility
+            const airdropStatus = await this.checkAirdropEligibility(walletAddress);
+
             // Fetch token information
             const devnetTokenInfo = await this.fetchTokenInfo(103, this.DEVNET_TOKEN);
             const testnetTokenInfo = await this.fetchTokenInfo(102, this.TESTNET_TOKEN);
@@ -111,7 +159,8 @@ class SonicRingCalculator {
                     balance: testnetBalance.uiAmount,
                     tokenInfo: testnetTokenInfo
                 },
-                totalBalance: devnetBalance.uiAmount + testnetBalance.uiAmount
+                totalBalance: devnetBalance.uiAmount + testnetBalance.uiAmount,
+                airdrop: airdropStatus
             };
 
             return result;
@@ -122,14 +171,18 @@ class SonicRingCalculator {
                 error: error.message,
                 devnet: { balance: 0 },
                 testnet: { balance: 0 },
-                totalBalance: 0
+                totalBalance: 0,
+                airdrop: {
+                    isEligible: false,
+                    totalAirdrop: 0,
+                    details: []
+                }
             };
         }
     }
 
     async processAddressFile(filePath) {
         try {
-            // Read and parse the addresses file
             const fileContent = await fs.readFile(filePath, 'utf8');
             const addresses = fileContent
                 .split('\n')
@@ -138,7 +191,6 @@ class SonicRingCalculator {
 
             console.log(chalk.cyan('\n🔍 Processing ') + chalk.yellow(addresses.length) + chalk.cyan(' addresses...\n'));
 
-            // Process addresses with rate limiting
             const results = [];
             const BATCH_SIZE = 5;
             
@@ -152,30 +204,25 @@ class SonicRingCalculator {
                 );
                 results.push(...batchResults);
                 
-                // Show progress
                 console.log(chalk.cyan(`Progress: ${chalk.yellow(Math.min(i + BATCH_SIZE, addresses.length))}/${chalk.yellow(addresses.length)} addresses processed`));
                 
-                // Add delay between batches
                 if (i + BATCH_SIZE < addresses.length) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
 
-            // Calculate grand total
-            const grandTotal = results.reduce((sum, result) => sum + result.totalBalance, 0);
-
-            // Generate summary
             const summary = {
                 totalAddresses: addresses.length,
                 successfulQueries: results.filter(r => !r.error).length,
                 failedQueries: results.filter(r => r.error).length,
-                grandTotal,
+                grandTotal: results.reduce((sum, result) => sum + result.totalBalance, 0),
+                totalEligibleAirdrops: results.filter(r => r.airdrop?.isEligible).length,
+                totalAirdropAmount: results.reduce((sum, result) => sum + (result.airdrop?.totalAirdrop || 0), 0),
                 details: results
             };
 
-            // Save results to a file
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const outputPath = path.join(process.cwd(), `balance-report-${timestamp}.json`);
+            const outputPath = path.join(process.cwd(), `sonic-report-${timestamp}.json`);
             await fs.writeFile(outputPath, JSON.stringify(summary, null, 2));
 
             return summary;
@@ -186,7 +233,6 @@ class SonicRingCalculator {
     }
 }
 
-// Example usage:
 async function main() {
     const calculator = new SonicRingCalculator();
     
@@ -194,17 +240,18 @@ async function main() {
         const addressFilePath = path.join(process.cwd(), 'addresses.txt');
         const summary = await calculator.processAddressFile(addressFilePath);
         
-        console.log(chalk.bold('\n📊 Sonic SVM Devnet + Testnet Balance Summary'));
+        console.log(chalk.bold('\n📊 Sonic SVM Balance & Airdrop Eligibility Summary'));
         console.log(chalk.bold('\nCreated by: https://github.com/rmndkyl'));
         console.log(chalk.gray('================'));
         console.log(chalk.blue(`📫 Total Addresses: ${chalk.yellow(summary.totalAddresses)}`));
         console.log(chalk.green(`✅ Successful Queries: ${chalk.yellow(summary.successfulQueries)}`));
         console.log(chalk.red(`❌ Failed Queries: ${chalk.yellow(summary.failedQueries)}`));
         console.log(chalk.magenta(`💰 Grand Total Balance: ${chalk.yellow(summary.grandTotal.toLocaleString())}`));
-        console.log(chalk.gray(`\n💾 Report saved to: ${chalk.cyan(`balance-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)}`));
+        console.log(chalk.cyan(`🎁 Eligible for Airdrop: ${chalk.yellow(summary.totalEligibleAirdrops)}`));
+        console.log(chalk.cyan(`💎 Total Airdrop Amount: ${chalk.yellow(summary.totalAirdropAmount.toLocaleString())}`));
+        console.log(chalk.gray(`\n💾 Report saved to: ${chalk.cyan(`sonic-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)}`));
         
-        // Display individual balances
-        console.log(chalk.bold('\n📝 Individual Balances'));
+        console.log(chalk.bold('\n📝 Individual Results'));
         console.log(chalk.gray('==================='));
         summary.details.forEach(result => {
             if (result.error) {
@@ -214,8 +261,17 @@ async function main() {
                     `${chalk.cyan(result.address)}: ` +
                     `Total=${chalk.yellow(result.totalBalance.toLocaleString())} ` +
                     `(${chalk.green(`Devnet=${result.devnet.balance.toLocaleString()}`)}` +
-                    `, ${chalk.blue(`Testnet=${result.testnet.balance.toLocaleString()}`)})`
+                    `, ${chalk.blue(`Testnet=${result.testnet.balance.toLocaleString()}`)})` +
+                    `\n    ${result.airdrop.isEligible ? 
+                        chalk.green(`✨ Airdrop Eligible: ${chalk.yellow(result.airdrop.totalAirdrop.toLocaleString())} tokens`) : 
+                        chalk.red('❌ Not eligible for airdrop')}`
                 );
+                
+                if (result.airdrop.isEligible) {
+                    result.airdrop.details.forEach(detail => {
+                        console.log(chalk.gray(`    • ${detail.amount} tokens - ${detail.category} (${detail.description})`));
+                    });
+                }
             }
         });
     } catch (error) {
@@ -223,10 +279,8 @@ async function main() {
     }
 }
 
-// Run if called directly
 if (require.main === module) {
     main();
 }
 
-// Export the calculator class
 module.exports = SonicRingCalculator;
